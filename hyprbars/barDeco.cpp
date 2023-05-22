@@ -14,13 +14,12 @@ CHyprBar::CHyprBar(CWindow* pWindow) : IHyprWindowDecoration(pWindow) {
     m_vLastWindowPos  = pWindow->m_vRealPosition.vec();
     m_vLastWindowSize = pWindow->m_vRealSize.vec();
 
-    const auto PMONITOR       = g_pCompositor->getMonitorFromID(pWindow->m_iMonitorID);
-    PMONITOR->scheduledRecalc = true;
-
+    const auto PMONITOR = g_pCompositor->getMonitorFromID(pWindow->m_iMonitorID);
     m_pMouseButtonCallback =
         HyprlandAPI::registerCallbackDynamic(PHANDLE, "mouseButton", [&](void* self, std::any param) { onMouseDown(std::any_cast<wlr_pointer_button_event*>(param)); });
 
-    m_pMouseMoveCallback = HyprlandAPI::registerCallbackDynamic(PHANDLE, "mouseMove", [&](void* self, std::any param) { onMouseMove(std::any_cast<Vector2D>(param)); });
+    m_pMouseMoveCallback      = HyprlandAPI::registerCallbackDynamic(PHANDLE, "mouseMove", [&](void* self, std::any param) { onMouseMove(std::any_cast<Vector2D>(param)); });
+    PMONITOR->scheduledRecalc = true;
 }
 
 CHyprBar::~CHyprBar() {
@@ -234,11 +233,13 @@ void CHyprBar::renderBarButtons(const Vector2D& bufferSize, const float scale) {
 }
 
 void CHyprBar::draw(CMonitor* pMonitor, float a, const Vector2D& offset) {
-    if (!g_pCompositor->windowValidMapped(m_pWindow))
-        return;
 
-    if (!m_pWindow->m_sSpecialRenderData.decorate)
+    if (!renderBar()) {
         return;
+    }
+    if (!pMonitor) {
+        return;
+    }
 
     static auto* const PROUNDING   = &HyprlandAPI::getConfigValue(PHANDLE, "decoration:rounding")->intValue;
     static auto* const PBORDERSIZE = &HyprlandAPI::getConfigValue(PHANDLE, "general:border_size")->intValue;
@@ -344,11 +345,144 @@ void CHyprBar::damageEntire() {
 
 SWindowDecorationExtents CHyprBar::getWindowDecorationReservedArea() {
     static auto* const PHEIGHT = &HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_height")->intValue;
-    return SWindowDecorationExtents{{0, *PHEIGHT}, {}};
+    if (renderBar()) {
+        return SWindowDecorationExtents{{0, *PHEIGHT}, {}};
+    }
+    return SWindowDecorationExtents{{0, 0}, {}};
 }
 
 Vector2D CHyprBar::cursorRelativeToBar() {
     static auto* const PHEIGHT = &HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_height")->intValue;
     static auto* const PBORDER = &HyprlandAPI::getConfigValue(PHANDLE, "general:border_size")->intValue;
     return g_pInputManager->getMouseCoordsInternal() - m_pWindow->m_vRealPosition.vec() + Vector2D{*PBORDER, *PHEIGHT + *PBORDER};
+}
+
+bool CHyprBar::renderBar() {
+    if (!g_pCompositor->windowValidMapped(m_pWindow))
+        return false;
+
+    if (!m_pWindow->m_sSpecialRenderData.decorate)
+        return false;
+
+    if (m_pWindow->isHidden() || !m_pWindow->m_bIsMapped)
+        return false;
+
+    static auto* const EXCLUDERULE = &HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:exclude_windowrulev2")->strValue;
+    auto               excludeRule = parseSWindowRule(*EXCLUDERULE);
+
+    if (excludeRule.second) {
+        if (sWindowRuleMatch(&excludeRule.first, m_pWindow))
+            return false;
+    }
+    return true;
+}
+
+// copy SWindowRule parser from Hyprland CConfigManage
+// TODO: refactor if window rules are added to API calls or if SWindowRule is refactored in Hyprland.
+std::pair<SWindowRule, bool> parseSWindowRule(const std::string& value) {
+    const auto  VALUE = value;
+    SWindowRule rule;
+    rule.v2      = true;
+    rule.szValue = VALUE;
+
+    const auto TITLEPOS      = VALUE.find("title:");
+    const auto CLASSPOS      = VALUE.find("class:");
+    const auto X11POS        = VALUE.find("xwayland:");
+    const auto FLOATPOS      = VALUE.find("floating:");
+    const auto FULLSCREENPOS = VALUE.find("fullscreen:");
+    const auto PINNEDPOS     = VALUE.find("pinned:");
+
+    if (TITLEPOS == std::string::npos && CLASSPOS == std::string::npos && X11POS == std::string::npos && FLOATPOS == std::string::npos && FULLSCREENPOS == std::string::npos &&
+        PINNEDPOS == std::string::npos) {
+        Debug::log(ERR, "Invalid rulev2 syntax: %s", VALUE.c_str());
+        return std::make_pair(rule, false);
+    }
+
+    auto extract = [&](size_t pos) -> std::string {
+        std::string result;
+        result = VALUE.substr(pos);
+
+        size_t min = 999999;
+        if (TITLEPOS > pos && TITLEPOS < min)
+            min = TITLEPOS;
+        if (CLASSPOS > pos && CLASSPOS < min)
+            min = CLASSPOS;
+        if (X11POS > pos && X11POS < min)
+            min = X11POS;
+        if (FLOATPOS > pos && FLOATPOS < min)
+            min = FLOATPOS;
+        if (FULLSCREENPOS > pos && FULLSCREENPOS < min)
+            min = FULLSCREENPOS;
+        if (PINNEDPOS > pos && PINNEDPOS < min)
+            min = PINNEDPOS;
+
+        result = result.substr(0, min - pos);
+
+        result = removeBeginEndSpacesTabs(result);
+
+        if (result.back() == ',')
+            result.pop_back();
+        return result;
+    };
+    if (CLASSPOS != std::string::npos) {
+        rule.szClass = extract(CLASSPOS + 6);
+    }
+    if (TITLEPOS != std::string::npos) {
+        rule.szTitle = extract(TITLEPOS + 6);
+    }
+    if (X11POS != std::string::npos) {
+        rule.bX11 = extract(X11POS + 9) == "1" ? 1 : 0;
+    }
+    if (FLOATPOS != std::string::npos) {
+        rule.bFloating = extract(FLOATPOS + 9) == "1" ? 1 : 0;
+    }
+    if (FULLSCREENPOS != std::string::npos) {
+        rule.bFullscreen = extract(FULLSCREENPOS + 11) == "1" ? 1 : 0;
+    }
+    if (PINNEDPOS != std::string::npos) {
+        rule.bPinned = extract(PINNEDPOS + 7) == "1" ? 1 : 0;
+    }
+    return std::make_pair(rule, true);
+}
+
+bool sWindowRuleMatch(SWindowRule* rule, CWindow* pWindow) {
+    if (!g_pCompositor->windowValidMapped(pWindow))
+        return false;
+
+    std::string title      = g_pXWaylandManager->getTitle(pWindow);
+    std::string appidclass = g_pXWaylandManager->getAppIDClass(pWindow);
+
+    bool        match = false;
+    if (rule->szClass != "") {
+        std::regex RULECHECK(rule->szClass);
+        if (std::regex_search(appidclass, RULECHECK))
+            match = true;
+    }
+
+    if (rule->szTitle != "") {
+        std::regex RULECHECK(rule->szTitle);
+        if (std::regex_search(title, RULECHECK))
+            match = true;
+    }
+
+    if (rule->bX11 != -1) {
+        if (pWindow->m_bIsX11 == rule->bX11)
+            match = true;
+    }
+
+    if (rule->bFloating != -1) {
+        if (pWindow->m_bIsFloating == rule->bFloating)
+            match = true;
+    }
+
+    if (rule->bFullscreen != -1) {
+        if (pWindow->m_bIsFullscreen == rule->bFullscreen)
+            match = true;
+    }
+
+    if (rule->bPinned != -1) {
+        if (pWindow->m_bPinned == rule->bPinned)
+            match = true;
+    }
+    return match;
 }

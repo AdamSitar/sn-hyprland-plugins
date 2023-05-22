@@ -40,6 +40,7 @@ class CHyprBar : public IHyprWindowDecoration {
 
     Vector2D                 cursorRelativeToBar();
 
+    bool                     renderBar();
     void                     renderBarTitle(const Vector2D& bufferSize, const float scale);
     void                     renderBarButtons(const Vector2D& bufferSize, const float scale);
     void                     onMouseDown(wlr_pointer_button_event* e);
@@ -53,3 +54,6 @@ class CHyprBar : public IHyprWindowDecoration {
     bool                     m_bDraggingThis = false;
     bool                     m_bDragPending  = false;
 };
+
+std::pair<SWindowRule, bool> parseSWindowRule(const std::string& value);
+bool                         sWindowRuleMatch(SWindowRule* rule, CWindow* pWindow);
