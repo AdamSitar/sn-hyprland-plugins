@@ -12,6 +12,8 @@ All config options are in `plugin:hyprbars`:
 plugin {
     hyprbars {
         # config
+        # exludes non floating windows and windows that have one of these titles Easy Effects|Volume Control|Bluetooth|iwgtk
+        exclude_windowrulev2 = floating:0,title:^(Easy Effects|Volume Control|Bluetooth|iwgtk)$
         buttons {
             # button config
         }
@@ -28,6 +30,9 @@ plugin {
 `bar_text_size` -> (int) bar's title text font size (default 10)
 
 `bar_text_font` -> (str) bar's title text font (default "Sans")
+
+`exclude_windowrulev2` -> like hyprland windowrulev2 `WINDOW` filter. currenly if any conditon in the rule is met the window will be ignored.
+
 
 ## Buttons Config
 
